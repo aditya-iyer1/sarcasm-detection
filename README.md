@@ -11,30 +11,36 @@ Welcome to the Sarcasm Detection Project! This guide provides setup instructions
 
 If you haven’t already, clone the repository to your local machine:
 
-```bash
+```zsh
 git clone <repo-url>
 cd <repo-name>
 ```
 
 ### 2. Set up Virtual Environment
 
+```zsh
 python -m venv venv  # Create virtual environment
 source venv/bin/activate  # Mac/Linux
 venv\Scripts\activate  # Windows
-
+```
 
 ### 3. Install Dependencies
 
+```zsh
 pip install -r requirements.txt
-
+```
 
 ### 4. Accessing the Data
 
 The dataset files are stored in the /data folder of the repository.
+
 Each record consists of three attributes:
 
-is_sarcastic: 1 if the record is sarcastic, otherwise 0
-headline: The headline of the news article
+`is_sarcastic`: 1 if the record is sarcastic, otherwise 0
+`headline`: The headline of the news article
+`article_link`: link to the original news article. Useful in collecting supplementary data
+
+
 
 Use the following to import the json file:
 
@@ -47,3 +53,21 @@ def parse_data(file):
 
 data = list(parse_data('../data/Sarcasm_Headlines_Dataset_v2.json'))
 ```
+
+### 5. Working with Repository
+
+Before Starting Work:
+
+```bash
+git pull origin main
+```
+
+When making changes:
+
+```bash
+git pull origin main
+git add .
+git commit -m "Commit Message"
+git push origin main
+```
+
