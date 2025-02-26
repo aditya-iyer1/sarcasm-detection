@@ -1,0 +1,28 @@
+---
+title: "PSTAT134_final"
+author: "Zimeng Yang"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(jsonlite)
+
+```
+
+```{r}
+parse_data <- function(file) {
+  con <- file(file, "r")
+  while (length(line <- readLines(con, n = 1, warn = FALSE)) > 0) {
+    yield(fromJSON(line))
+  }
+  close(con)
+}
+
+data <- list()
+for (item in parse_data("../data/Sarcasm_Headlines_Dataset_v2.json")) {
+  data <- append(data, list(item))
+}
+
+```
+
