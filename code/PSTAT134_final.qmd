@@ -1,0 +1,258 @@
+---
+title: "PSTAT134_final"
+author: "Zimeng Yang"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(reticulate)
+library(stringr)
+library(tidytext)
+library(wordcloud2)
+library(tm)
+library(ggthemes)
+library(ggwordcloud)
+library(ggplot2)
+library(extrafont)
+library(wordcloud)
+library(RColorBrewer)
+
+```
+
+```{r}
+df <- stream_in(file("Sarcasm_Headlines_Dataset.json"), 
+                verbose = FALSE)
+```
+
+```{r}
+df <- as_tibble(df)
+
+```
+
+```{r}
+glimpse(df)
+
+```
+
+### Exploratory Data Analysis
+
+#### 1
+
+```{r}
+# Class percentage
+df %>%
+  count(is_sarcastic) %>%
+  mutate(perc = n / sum(n) * 100) %>%
+  ggplot(aes(x = factor(is_sarcastic), y = perc)) +
+  geom_col(fill = c("#FF6B6B", "#4ECDC4")) +
+  geom_text(aes(label = sprintf("%.1f%%", perc)), vjust = -0.5) +
+  labs(title = "Class Distribution (0=Non-sarcastic, 1=Sarcastic)",
+       x = "Class", y = "Percentage")
+
+```
+
+#### 2
+
+```{r}
+df_eda <- df %>%
+  mutate(
+    char_count = str_length(headline),
+    word_count = str_count(headline, "\\S+")  # 按空格分割单词
+  )
+
+# char length
+ggplot(df_eda, aes(x = char_count, fill = factor(is_sarcastic))) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Headline Character Length Distribution by Class")
+
+
+# word count
+ggplot(df_eda, aes(x = word_count, fill = factor(is_sarcastic))) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  labs(title = "Word Count Distribution by Class")
+```
+
+```{r}
+df_clean <- df %>%
+  mutate(
+    headline_clean = headline %>%
+      tolower() %>%                 
+      str_remove_all("[^a-z ]") %>% 
+      str_replace_all("\\s+", " ")  
+  )
+
+tidy_text <- df_clean %>%
+  unnest_tokens(word, headline_clean) %>%
+  anti_join(stop_words, by = "word")
+```
+
+```{r}
+# most commonly-occurring words, broken down by `is_sarcastic`
+top_words <- tidy_text %>%
+  group_by(is_sarcastic, word) %>%
+  summarise(n = n()) %>%
+  group_by(is_sarcastic) %>%
+  slice_max(n, n = 15) %>%
+  ungroup()
+
+
+ggplot(top_words, aes(x = reorder_within(word, n, is_sarcastic), y = n, fill = factor(is_sarcastic))) +
+  geom_col() +
+  scale_x_reordered() +
+  coord_flip() +
+  facet_wrap(~is_sarcastic, scales = "free_y") +
+  labs(title = "Top Words by Class", x = "Word")
+```
+
+```{r}
+# expand stop words
+custom_stop_words <- stop_words %>%
+  bind_rows(tibble(word = c("http", "com", "www", "html", "bit.ly", "amp", "rt"))) %>%
+  distinct(word)
+
+# clean & remove & lowercase & tokenize
+df_clean <- df %>%
+  mutate(
+    headline_clean = headline %>%
+      tolower() %>%
+      str_remove_all("[^a-z ]") %>%  
+      str_replace_all("\\s+", " ") %>%  
+      str_trim() 
+  ) %>%
+  unnest_tokens(word, headline_clean) %>%
+  anti_join(custom_stop_words, by = "word") %>%  
+  filter(nchar(word) > 2) %>%  
+  group_by(is_sarcastic, article_link) %>%
+  summarise(text_clean = paste(word, collapse = " "), .groups = "drop") 
+```
+
+```{r}
+comparison_data <- df_clean %>%
+  unnest_tokens(word, text_clean) %>%
+  count(is_sarcastic, word) %>%
+  pivot_wider(
+    names_from = is_sarcastic,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  rename("Non_Sarcastic" = "0", "Sarcastic" = "1") %>%
+  as.data.frame() %>%
+  column_to_rownames("word")
+
+```
+
+```{r}
+comparison.cloud(
+  comparison_data,
+  colors = c("#E41A1C", "#377EB8"), 
+  max.words = 100,
+  title.size = 1.5,
+  scale = c(4, 0.5) 
+)
+```
+
+
+```{r}
+# Ensure headline_clean exists for bigram extraction
+df_clean <- df %>%
+  mutate(
+    headline_clean = headline %>%
+      tolower() %>%
+      str_remove_all("[^a-z ]") %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  )
+
+# Extract bigrams
+bigrams <- df_clean %>%
+  unnest_tokens(bigram, headline_clean, token = "ngrams", n = 2) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(
+    !word1 %in% stop_words$word,
+    !word2 %in% stop_words$word
+  ) %>%
+  unite(bigram, word1, word2, sep = " ")
+
+# High-frequency bigrams
+bigrams %>%
+  group_by(is_sarcastic, bigram) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(is_sarcastic) %>%
+  slice_max(n, n = 10) %>%
+  ggplot(aes(x = reorder(bigram, n), y = n)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~is_sarcastic, scales = "free") +
+  labs(title = "Top Bigrams by Class")
+
+```
+
+```{r}
+sentiment_lexicon <- get_sentiments("afinn")
+
+sentiment_scores <- tidy_text %>%
+  inner_join(sentiment_lexicon, by = "word") %>%
+  group_by(is_sarcastic, article_link) %>%
+  summarise(sentiment = sum(value))
+
+ggplot(sentiment_scores, aes(x = sentiment, fill = factor(is_sarcastic))) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Sentiment Score Distribution by Class")
+```
+
+
+```{r}
+tf_idf_by_class <- df_clean %>%
+  unnest_tokens(word, headline_clean) %>%
+  count(is_sarcastic, word) %>%
+  bind_tf_idf(word, is_sarcastic, n)  
+```
+
+```{r}
+sarcastic_tfidf <- tf_idf_by_class %>%
+  filter(is_sarcastic == 1) %>%
+  arrange(desc(tf_idf)) %>%
+  slice_head(n = 30)  # Top 30
+
+sarcastic_low_tfidf <- tf_idf_by_class %>%
+  filter(is_sarcastic == 1) %>%
+  arrange(tf_idf) %>%
+  slice_head(n = 30)  # Bottom 30
+```
+
+```{r}
+non_sarcastic_tfidf <- tf_idf_by_class %>%
+  filter(is_sarcastic == 0) %>%
+  arrange(desc(tf_idf)) %>%
+  slice_head(n = 30)
+
+non_sarcastic_low_tfidf <- tf_idf_by_class %>%
+  filter(is_sarcastic == 0) %>%
+  arrange(tf_idf) %>%
+  slice_head(n = 30)
+```
+
+```{r}
+bind_rows(
+  sarcastic_tfidf %>% mutate(class = "Sarcastic"),
+  non_sarcastic_tfidf %>% mutate(class = "Non-Sarcastic")
+) %>%
+  group_by(class) %>%
+  slice_max(tf_idf, n = 15) %>% 
+  ungroup() %>%
+  ggplot(aes(x = reorder_within(word, tf_idf, class), y = tf_idf, fill = class)) +
+  geom_col() +
+  scale_x_reordered() +
+  coord_flip() +
+  facet_wrap(~class, scales = "free") +
+  labs(
+    title = "Top TF-IDF Words by Class",
+    x = "Word",
+    y = "TF-IDF Score"
+  ) +
+  theme_economist() 
+```
