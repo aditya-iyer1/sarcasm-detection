@@ -5,7 +5,7 @@ Welcome to the Sarcasm Detection Project! This guide provides setup instructions
 ---
 
 
-## Getting Started
+## Getting Starte d
 
 ### 1. Clone the Repository
 
