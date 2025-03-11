@@ -54,20 +54,3 @@ def parse_data(file):
 data = list(parse_data('../data/Sarcasm_Headlines_Dataset_v2.json'))
 ```
 
-### 5. Working with Repository
-
-Before Starting Work:
-
-```bash
-git pull origin main
-```
-
-When making changes:
-
-```bash
-git pull origin main
-git add .
-git commit -m "Commit Message"
-git push origin main
-```
-
