@@ -3,6 +3,8 @@ title: "PSTAT134_final"
 author: "Zimeng Yang"
 format: pdf
 editor: visual
+execute:
+  eval: true
 ---
 
 ```{r}
@@ -20,6 +22,8 @@ library(ggplot2)
 library(extrafont)
 library(wordcloud)
 library(RColorBrewer)
+library(e1071)  # Naive Bayes
+library(caret)
 
 ```
 
@@ -155,7 +159,6 @@ comparison.cloud(
 )
 ```
 
-
 ```{r}
 # Ensure headline_clean exists for bigram extraction
 df_clean <- df %>%
@@ -203,7 +206,6 @@ ggplot(sentiment_scores, aes(x = sentiment, fill = factor(is_sarcastic))) +
   geom_density(alpha = 0.6) +
   labs(title = "Sentiment Score Distribution by Class")
 ```
-
 
 ```{r}
 tf_idf_by_class <- df_clean %>%
@@ -255,4 +257,274 @@ bind_rows(
     y = "TF-IDF Score"
   ) +
   theme_economist() 
+```
+
+### Modeling Part
+
+#### Naive Bayes (Bad model)
+
+```{r}
+df_clean <- df %>%
+  mutate(
+    text_clean = headline %>%
+      tolower() %>%
+      str_remove_all("[^a-z ]") %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  )
+```
+
+```{r}
+# Document-Term Matrix
+corpus <- Corpus(VectorSource(df_clean$text_clean))
+dtm <- DocumentTermMatrix(corpus, control = list(
+  weighting = weightTf,  # Term Frequency
+  bounds = list(global = c(10, 1000))  # 
+))
+dtm
+
+dtm_df <- as.data.frame(as.matrix(dtm))
+dtm_df$is_sarcastic <- df_clean$is_sarcastic 
+
+
+set.seed(123)
+train_index <- sample(1:nrow(dtm_df), 0.8 * nrow(dtm_df))
+train_data <- dtm_df[train_index, ]
+test_data <- dtm_df[-train_index, ]
+
+```
+
+```{r}
+nb_model <- naiveBayes(as.factor(is_sarcastic) ~ ., data = train_data, laplace = 1)
+
+
+pred <- predict(nb_model, test_data)
+confusionMatrix(pred, as.factor(test_data$is_sarcastic))
+
+word_effects <- data.frame(
+  word = colnames(dtm_df)[-ncol(dtm_df)],
+  log_ratio = log( (nb_model$tables$`1` + 1e-6) / (nb_model$tables$`0` + 1e-6) )  # 防止除零
+)
+
+head(word_effects, 20)  
+```
+
+### SVM
+
+```{r,eval=FALSE}
+library(e1071)
+library(quanteda)
+
+df_clean <- df %>%
+  mutate(
+    text_clean = headline %>%
+      tolower() %>%
+      str_remove_all("[^a-z !?']") %>% 
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  )
+```
+
+```{r, eval=FALSE}
+dfm_obj <- tokens(df_clean$text_clean) %>%
+  dfm() %>%
+  dfm_tfidf()
+
+X <- convert(dfm_obj, to = "matrix")
+y <- df_clean$is_sarcastic
+
+set.seed(123)
+train_index <- sample(1:nrow(X), 20000)  
+train_x <- X[train_index, ]
+train_y <- y[train_index]
+```
+
+```{r,eval=FALSE}
+svm_model <- svm(
+  x = train_x,
+  y = as.factor(train_y),
+  kernel = "linear",
+  cost = 1,
+  class.weights = c("0" = 1, "1" = 1.5), 
+  scale = FALSE
+)
+
+test_pred <- predict(svm_model, X[-train_index, ])
+confusionMatrix(test_pred, as.factor(y[-train_index]))
+```
+
+```{r,eval=FALSE}
+library(quanteda)
+library(Matrix)
+
+dfm_sparse <- tokens(df_clean$text_clean) %>%
+  dfm()  
+
+ndoc(dfm_sparse)
+ nfeat(dfm_sparse)
+
+X <- dfm_sparse
+y <- df_clean$is_sarcastic
+```
+
+```{r,eval=FALSE}
+dfm_filtered <- dfm_sparse %>%
+  dfm_trim(
+    min_termfreq = 0.00015, 
+    max_termfreq = 0.9,   
+    termfreq_type = "prop"
+  )
+
+dfm_filtered <- dfm_filtered %>%
+  dfm_trim(
+    min_docfreq = 5,       
+    docfreq_type = "count"
+  )
+
+nfeat(dfm_filtered)
+```
+
+```{r,eval=FALSE}
+cost_values <- 10^seq(-3, 3, by = 1)  # [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+
+library(doParallel)
+registerDoParallel(cores = 4)
+```
+
+```{r,eval=FALSE}
+tune_results <- foreach(c = cost_values, .combine = rbind) %dopar% {
+  acc <- LiblineaR(
+    data = X_sparse[train_index, ],
+    target = y[train_index],
+    type = 1,
+    cost = c,
+    cross = 5 =
+  )
+  data.frame(cost = c, accuracy = acc)
+}
+
+best_cost <- tune_results$cost[which.max(tune_results$accuracy)]
+
+```
+
+```{r,eval=FALSE}
+library(tidyverse)
+library(quanteda)
+library(Matrix)
+library(LiblineaR)
+library(doParallel)
+
+=custom_stopwords <- c(stopwords("en"), 
+                     "http", "com", "www", "amp", "rt", "''", "``", "'s")
+
+=df_clean <- df %>%
+  mutate(
+=    text_clean = headline %>%
+      tolower() %>%
+      str_remove_all("[^a-z !?']") %>% 
+      str_replace_all("\\s+", " ") %>%
+      str_trim(),
+    
+    num_questions = str_count(text_clean, "\\?"),
+    num_exclamations = str_count(text_clean, "!"),
+    has_quotes = as.numeric(str_detect(text_clean, "'")),
+    
+    is_sarcastic = as.character(is_sarcastic)
+  )
+
+dfm_sparse <- tokens(df_clean$text_clean) %>%
+  tokens_remove(pattern = custom_stopwords) %>%
+  tokens_ngrams(n = 1:2) %>%  
+  dfm() %>%
+  dfm_trim(
+    min_termfreq = 0.0005,
+    max_termfreq = 0.3,
+    min_docfreq = 5
+  )
+
+
+dfm_matrix <- convert(dfm_sparse, to = "matrix") %>% 
+  as("dgCMatrix")
+
+rownames(dfm_matrix) <- df_clean$article_link
+
+
+stat_features <- as.matrix(
+  df_clean %>% select(num_questions, num_exclamations, has_quotes)
+)
+
+X_enhanced <- cbind2(dfm_matrix, stat_features) %>% 
+  as("dgCMatrix")
+
+y <- df_clean$is_sarcastic 
+
+
+if(nrow(df_clean) != n_distinct(df_clean$article_link)) {
+  df_clean_unique <- df_clean %>% 
+    distinct(article_link, .keep_all = TRUE)
+  
+  X_enhanced <- X_enhanced[df_clean_unique$article_link, , drop = FALSE]
+  
+  df_clean <- df_clean_unique
+}
+```
+
+```{r,eval=FALSE}
+set.seed(123)
+train_index <- sample(1:nrow(X_enhanced), 0.8 * nrow(X_enhanced))
+
+class_counts <- table(y[train_index])  
+class_ratio <- class_counts / sum(class_counts)
+weights <- c("0" = 1/class_ratio["0"], "1" = 1/class_ratio["1"])
+
+registerDoParallel(cores = 4)
+cost_values <- 10^seq(-3, 3, by = 1)
+
+tune_results <- foreach(c = cost_values, .combine = rbind) %dopar% {
+  acc <- LiblineaR(
+    data = X_enhanced[train_index, ],
+    target = y[train_index],
+    type = 1,
+    cost = c,
+    cross = 5,
+    wi = weights,  
+    verbose = FALSE
+  )
+  data.frame(cost = c, accuracy = acc)
+}
+
+best_cost <- tune_results$cost[which.max(tune_results$accuracy)]
+
+final_model <- LiblineaR(
+  data = X_enhanced[train_index, ],
+  target = y[train_index],
+  type = 1,
+  cost = best_cost,
+  wi = weights,
+  verbose = TRUE
+)
+
+pred <- predict(final_model, X_enhanced[-train_index, ])$predictions
+confusionMatrix(factor(pred), factor(y[-train_index]))
+
+feature_weights <- coef(final_model)[-1]
+important_features <- data.frame(
+  feature = c(colnames(dfm_matrix), 
+                  "num_questions", "num_exclamations", "has_quotes"),
+  weight = feature_weights
+) %>%
+  arrange(desc(abs(weight))) %>%
+  filter(abs(weight) > quantile(abs(weight), 0.9))
+
+print(head(important_features, 20))
+
+library(ggplot2)
+important_features %>%
+  head(20) %>%
+  mutate(feature = fct_reorder(feature, weight)) %>%
+  ggplot(aes(weight, feature, fill = weight > 0)) +
+  geom_col() +
+  scale_fill_manual(values = c("#FF6B6B", "#4ECDC4")) +
+  labs(title = "Top 20 Discriminative Features",
+       x = "Model Weight", y = "Feature")
 ```
